@@ -1,0 +1,72 @@
+.watermark {
+  display: none !important;
+}
+
+/* Hide the top "Chainlit" brand/header (matches your screenshot) */
+header {
+  display: none !important;
+}
+
+/* Safety: ensure no blank gap remains */
+main {
+  padding-top: 0 !important;
+}
+
+/* Optional: hide outbound links to chainlit site only */
+a[href*="chainlit.io" i] {
+  display: none !important;
+}
+
+/* As a last resort, hide small centered elements that only say "Chainlit" */
+/* Hide only explicit branding wrappers, keep intro containers visible */
+.cl-logo, .brand, .branding, .brand-wrap {
+  display: none !important;
+}
+
+/* Do not hide inline svg + text; allow brand area to render */
+
+/* Remove legacy custom-brand styles (using built-in brand instead) */
+
+/* Removed fixed overlay; keep only inline brand above composer */
+
+/* Welcome markdown logo styles no longer required */
+
+/* Remove CSS pseudo-element logos; rely on built-in brand spot */
+
+/* Replace the built-in center brand with the URUS image */
+.cl-chat-intro,
+[data-testid="branding"],
+[data-testid="brand"],
+.cl-brand,
+.cl-branding,
+.brand,
+.branding {
+  position: relative;
+}
+
+.cl-chat-intro > *,
+[data-testid="branding"] > *,
+[data-testid="brand"] > *,
+.cl-brand > *,
+.cl-branding > *,
+.brand > *,
+.branding > * {
+  opacity: 0 !important; /* hide default content without removing layout */
+}
+
+.cl-chat-intro::before,
+[data-testid="branding"]::before,
+[data-testid="brand"]::before,
+.cl-brand::before,
+.cl-branding::before,
+.brand::before,
+.branding::before {
+  content: "";
+  display: block;
+  background: url('/public/urus_logo.jpeg') no-repeat center / contain;
+  width: 100%;
+  max-width: 720px;
+  height: 160px;
+  margin: 0 auto 12px;
+}
+
