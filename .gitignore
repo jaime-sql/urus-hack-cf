@@ -71,3 +71,7 @@ logs/
 # Node / front-end artifacts if ever present
 node_modules/
 **/node_modules/
+
+test_indexes.py
+test_schema.py
+test_search.py
