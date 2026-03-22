@@ -65,12 +65,8 @@ logs/
 .env.*
 !.env.example
 
-# Chainlit runtime artifacts (keep config & assets)
-.chainlit/*.db
-.chainlit/*.sqlite
-.chainlit/*.log
-.chainlit/cache/
-.chainlit/state/
+# Chainlit — ignore entire folder (no configs committed)
+.chainlit/
 
 # Node / front-end artifacts if ever present
 node_modules/
