@@ -16,12 +16,32 @@ async def on_message(message: cl.Message):
     endpoint = os.getenv("AZURE_SEARCH_ENDPOINT")
     api_key = os.getenv("AZURE_SEARCH_API_KEY")
     index_name = os.getenv("AZURE_SEARCH_INDEX")
+    
+    aoai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+    aoai_key = os.getenv("AZURE_OPENAI_API_KEY")
+    aoai_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+    aoai_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
+    aoai_embedding_deployment = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-small")
 
     docs_for_rag = []
     if endpoint and api_key and index_name:
         try:
+            # 1. Pre-inicializar OpenAI para usar re-uso y generar embeddings
+            llm = None
+            vector_queries = None
+            if aoai_endpoint and aoai_key:
+                llm = AzureOpenAI(azure_endpoint=aoai_endpoint, api_key=aoai_key, api_version=aoai_version)
+                # Generar embedding de la pregunta si hay modelo de embedding definido
+                if aoai_embedding_deployment:
+                    from azure.search.documents.models import VectorizedQuery
+                    try:
+                        emb_resp = llm.embeddings.create(input=[message.content], model=aoai_embedding_deployment)
+                        vector_queries = [VectorizedQuery(vector=emb_resp.data[0].embedding, k_nearest_neighbors=3, fields="text_vector")]
+                    except Exception as e:
+                        print(f"Error generando embedding (pasando a búsqueda solo por texto): {e}")
+
             client = SearchClient(endpoint=endpoint, index_name=index_name, credential=AzureKeyCredential(api_key))
-            results = client.search(message.content, top=5)
+            results = client.search(search_text=message.content, vector_queries=vector_queries, top=5)
 
             lines = ["Top results from Azure AI Search (top 5):\n"]
             for i, doc in enumerate(results):
@@ -46,11 +66,6 @@ async def on_message(message: cl.Message):
                 })
 
             # If Azure OpenAI is configured, generate an answer grounded on these docs
-            aoai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-            aoai_key = os.getenv("AZURE_OPENAI_API_KEY")
-            aoai_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
-            aoai_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview")
-
             if aoai_endpoint and aoai_key and aoai_deployment:
                 # Build a compact context with citations like [1], [2] …
                 context_lines = []
@@ -82,11 +97,9 @@ async def on_message(message: cl.Message):
 
                 try:
                     # Utiliza el SDK de Azure OpenAI para generar la respuesta
-                    llm = AzureOpenAI(
-                        azure_endpoint=aoai_endpoint, 
-                        api_key=aoai_key, 
-                        api_version=aoai_version
-                    )
+                    if not llm:
+                        llm = AzureOpenAI(azure_endpoint=aoai_endpoint, api_key=aoai_key, api_version=aoai_version)
+                        
                     resp = llm.chat.completions.create(
                         model=aoai_deployment,
                         messages=[
