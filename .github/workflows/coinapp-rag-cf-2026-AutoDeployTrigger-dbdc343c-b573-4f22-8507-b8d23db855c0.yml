@@ -35,15 +35,11 @@ jobs:
         uses: azure/container-apps-deploy-action@v2
         with:
           appSourcePath: ${{ github.workspace }}
-          _dockerfilePathKey_: _dockerfilePath_
-          _targetLabelKey_: _targetLabel_
           registryUrl: acrhackcf2026.azurecr.io
           registryUsername: ${{ secrets.COINAPPRAGCF2026_REGISTRY_USERNAME }}
           registryPassword: ${{ secrets.COINAPPRAGCF2026_REGISTRY_PASSWORD }}
           containerAppName: coinapp-rag-cf-2026
           resourceGroup: hackCF2026
           imageToBuild: acrhackcf2026.azurecr.io/coinapp-rag-cf-2026:${{ github.sha }}
-          _buildArgumentsKey_: |
-            _buildArgumentsValues_
 
 
