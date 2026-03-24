@@ -70,3 +70,7 @@ a[href*="chainlit.io" i] {
   margin: 0 auto 12px;
 }
 
+
+
+/* Force the Send Button and Primary elements to use URUS Gold */
+.MuiFab-primary, .MuiIconButton-colorPrimary, .MuiButton-containedPrimary, #send-button, [id^='send-button'], .cl-send-button { background-color: #dbb054 !important; color: white !important; }
