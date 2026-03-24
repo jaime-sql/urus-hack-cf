@@ -95,7 +95,7 @@ reaction_on_message_received = false
 
 [UI]
 # Name of the assistant.
-name = "Assistant"
+name = "URUS"
 
 # default_theme = "dark"
 
@@ -156,8 +156,7 @@ alert_style = "classic"
 logo_file_url = "/public/urus_logo.jpeg"
 
 # Load assistant avatar image directly from URL.
-default_avatar_file_url = ""
-
+default_avatar_file_url = "/public/favicon.png"
 # Avatar size in pixels (default: 20).
 # avatar_size = 20
 
@@ -176,3 +175,9 @@ default_avatar_file_url = ""
 
 [meta]
 generated_by = "2.10.0"
+
+[UI.theme]
+[UI.theme.light.primary]
+    main = "#dbb054"
+[UI.theme.dark.primary]
+    main = "#dbb054"
