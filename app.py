@@ -120,11 +120,22 @@ async def on_message(message: cl.Message):
                     if not answer:
                         answer = "No pude generar respuesta con el contexto disponible."
 
-                    await cl.Message(content=answer).send()
-                    # Solo mostrar las fuentes si el asistente citó algún documento (ej. [1])
+                    # Crear elementos de citación elegantes en Chainlit
                     import re
+                    text_elements = []
                     if re.search(r'\[\d+\]', answer):
-                        await cl.Message(content="\n".join(lines)).send()
+                        for d in docs_for_rag:
+                            source_name = str(d['id'])
+                            elem_content = f"**Documento:** {d['title']}\n"
+                            if d['url']:
+                                elem_content += f"**Ruta:** {d['url']}\n"
+                            elem_content += f"\n---\n**Extracto Recuperado:**\n{d['snippet']}"
+                            
+                            text_elements.append(
+                                cl.Text(name=source_name, content=elem_content, display="side")
+                            )
+
+                    await cl.Message(content=answer, elements=text_elements).send()
                     return
                 except Exception as e:
                     await cl.Message(content=(
