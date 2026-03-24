@@ -22,6 +22,12 @@ async def on_message(message: cl.Message):
     aoai_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
     aoai_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
     aoai_embedding_deployment = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-small")
+    
+    # Parámetros para optimizar respuestas y tokens
+    search_top_k = int(os.getenv("SEARCH_TOP_K", "3"))
+    openai_temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.2"))
+    openai_top_p = float(os.getenv("OPENAI_TOP_P", "0.95"))
+    openai_max_tokens = int(os.getenv("OPENAI_MAX_TOKENS", "500"))
 
     docs_for_rag = []
     if endpoint and api_key and index_name:
@@ -36,14 +42,14 @@ async def on_message(message: cl.Message):
                     from azure.search.documents.models import VectorizedQuery
                     try:
                         emb_resp = llm.embeddings.create(input=[message.content], model=aoai_embedding_deployment)
-                        vector_queries = [VectorizedQuery(vector=emb_resp.data[0].embedding, k_nearest_neighbors=3, fields="text_vector")]
+                        vector_queries = [VectorizedQuery(vector=emb_resp.data[0].embedding, k_nearest_neighbors=search_top_k, fields="text_vector")]
                     except Exception as e:
                         print(f"Error generando embedding (pasando a búsqueda solo por texto): {e}")
 
             client = SearchClient(endpoint=endpoint, index_name=index_name, credential=AzureKeyCredential(api_key))
-            results = client.search(search_text=message.content, vector_queries=vector_queries, top=5)
+            results = client.search(search_text=message.content, vector_queries=vector_queries, top=search_top_k)
 
-            lines = ["Top results from Azure AI Search (top 5):\n"]
+            lines = [f"Top results from Azure AI Search (top {search_top_k}):\n"]
             for i, doc in enumerate(results):
                 # Campos típicos: title, url/source, content/text
                 title = doc.get("title") or doc.get("metadata_storage_name") or doc.get("id") or f"doc-{i+1}"
@@ -106,15 +112,19 @@ async def on_message(message: cl.Message):
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_prompt},
                         ],
-                        temperature=0.2,
+                        temperature=openai_temperature,
+                        top_p=openai_top_p,
+                        max_tokens=openai_max_tokens,
                     )
                     answer = resp.choices[0].message.content if resp.choices else ""
                     if not answer:
                         answer = "No pude generar respuesta con el contexto disponible."
 
                     await cl.Message(content=answer).send()
-                    # Also show sources list below the answer
-                    await cl.Message(content="\n".join(lines)).send()
+                    # Solo mostrar las fuentes si el asistente citó algún documento (ej. [1])
+                    import re
+                    if re.search(r'\[\d+\]', answer):
+                        await cl.Message(content="\n".join(lines)).send()
                     return
                 except Exception as e:
                     await cl.Message(content=(
