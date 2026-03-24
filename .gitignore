@@ -65,9 +65,8 @@ logs/
 .env.*
 !.env.example
 
-# Chainlit — ignore entire folder (no configs committed)
-.chainlit/
-
+# Chainlit UI configuration
+!.chainlit/config.toml
 # Node / front-end artifacts if ever present
 node_modules/
 **/node_modules/
