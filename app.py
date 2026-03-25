@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
 from openai import AzureOpenAI, OpenAI
-from audit import log_interaction
+from audit import log_interaction, compute_grounding_score 
 from safety import check_text
 load_dotenv(override=True)  # loads variables from .env into the environment, override defaults
 
@@ -165,6 +165,37 @@ async def on_message(message: cl.Message):
                     if not answer:
                         answer = "No pude generar respuesta con el contexto disponible."
 
+                    # Grounding score
+                    grounding_score = compute_grounding_score(answer, docs_for_rag)
+                    if grounding_score >= 0.7:
+                        score_label = "🟢 Alta"
+                    elif grounding_score >= 0.4:
+                        score_label = "🟡 Media"
+                    else:
+                        score_label = "🔴 Baja"
+
+                    answer_with_score = (
+                        f"{answer}\n\n---\n"
+                        f"📊 **Confiabilidad:** {score_label} ({grounding_score:.0%})"
+                    )
+
+                    # Elementos de citación
+                    import re
+                    text_elements = []
+                    if re.search(r'\[\d+\]', answer):
+                        for d in docs_for_rag:
+                            source_name = str(d['id'])
+                            elem_content = f"**Documento:** {d['title']}\n"
+                            if d['url']:
+                                elem_content += f"**Ruta:** {d['url']}\n"
+                            elem_content += f"\n---\n**Extracto Recuperado:**\n{d['snippet']}"
+                            text_elements.append(
+                                cl.Text(name=source_name, content=elem_content, display="side")
+                            )
+
+                    await cl.Message(content=answer_with_score, elements=text_elements).send()
+
+                    # Audit log
                     user = cl.user_session.get("user")
                     user_id = user.identifier if user else "anonymous"
                     elapsed_ms = int((time() - start_time) * 1000)
@@ -176,23 +207,6 @@ async def on_message(message: cl.Message):
                         response_time_ms=elapsed_ms,
                         grounded=True,
                     )
-                    
-                    # Crear elementos de citación elegantes en Chainlit
-                    import re
-                    text_elements = []
-                    if re.search(r'\[\d+\]', answer):
-                        for d in docs_for_rag:
-                            source_name = str(d['id'])
-                            elem_content = f"**Documento:** {d['title']}\n"
-                            if d['url']:
-                                elem_content += f"**Ruta:** {d['url']}\n"
-                            elem_content += f"\n---\n**Extracto Recuperado:**\n{d['snippet']}"
-                            
-                            text_elements.append(
-                                cl.Text(name=source_name, content=elem_content, display="side")
-                            )
-
-                    await cl.Message(content=answer, elements=text_elements).send()
                     return
                 except Exception as e:
                     await cl.Message(content=(
