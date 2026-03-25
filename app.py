@@ -6,6 +6,39 @@ from azure.search.documents import SearchClient
 from openai import AzureOpenAI, OpenAI
 load_dotenv(override=True)  # loads variables from .env into the environment, override defaults
 
+# ✅ NUEVO: Callback de autenticación OAuth con Azure Entra ID
+@cl.oauth_callback
+def oauth_callback(
+    provider_id: str,
+    token: str,
+    raw_user_data: dict,
+    default_user: cl.User,
+) -> cl.User | None:
+    # Construir nombre desde claims de Azure AD
+    given_name = raw_user_data.get("given_name", "")
+    family_name = raw_user_data.get("family_name", "")
+    
+    if given_name:
+        display_name = f"{given_name} {family_name}".strip()
+    else:
+        display_name = raw_user_data.get("name", default_user.identifier.split("@")[0])
+
+    # Guardar el nombre en metadata para usarlo después
+    default_user.metadata["display_name"] = display_name
+    return default_user
+
+
+# ✅ NUEVO: Mensaje de bienvenida personalizado al iniciar sesión
+@cl.on_chat_start
+async def on_chat_start():
+    user = cl.user_session.get("user")
+    if user:
+        name = user.metadata.get("display_name") or user.identifier.split("@")[0]
+        first_name = name.split()[0].capitalize()
+        await cl.Message(
+            content=f"Bienvenido, **{first_name}** 👋\n¿En qué puedo ayudarte hoy?"
+        ).send()
+        
 # Esta función se ejecuta cada vez que el usuario envía un mensaje
 @cl.on_message
 async def on_message(message: cl.Message):

@@ -1,0 +1,19 @@
+[project]
+enable_telemetry = false
+
+[UI]
+name = "URUS"
+logo = "/public/urus_logo.jpeg"
+
+[auth]
+require_login = true
+
+[[auth.oauth_providers]]
+id = "azure-ad"
+client_id = "${OAUTH_AZURE_AD_CLIENT_ID}"
+client_secret = "${OAUTH_AZURE_AD_CLIENT_SECRET}"
+scopes = ["openid", "profile", "email", "User.Read"]
+authorize_url = "https://login.microsoftonline.com/${OAUTH_AZURE_AD_TENANT_ID}/oauth2/v2.0/authorize?prompt=select_account&domain_hint=maitrosoftaioutlook.onmicrosoft.com"
+token_url     = "https://login.microsoftonline.com/${OAUTH_AZURE_AD_TENANT_ID}/oauth2/v2.0/token"
+userinfo_url  = "https://graph.microsoft.com/oidc/userinfo"
+default_user_fields = { identifier = "email", name = "name", image = "picture" }
