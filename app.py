@@ -1,9 +1,13 @@
+from time import time
+
 import chainlit as cl
 import os
 from dotenv import load_dotenv
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
 from openai import AzureOpenAI, OpenAI
+from audit import log_interaction
+from safety import check_text
 load_dotenv(override=True)  # loads variables from .env into the environment, override defaults
 
 @cl.oauth_callback
@@ -30,6 +34,9 @@ def oauth_callback(
 
 @cl.on_chat_start
 async def on_chat_start():
+    cl.user_session.set("message_history", [])
+    cl.user_session.set("attached_document_text", "")
+
     user = cl.user_session.get("user")
     if user:
         name = user.metadata.get("display_name", user.identifier)
@@ -40,7 +47,32 @@ async def on_chat_start():
 # Esta función se ejecuta cada vez que el usuario envía un mensaje
 @cl.on_message
 async def on_message(message: cl.Message):
+    msg_history = cl.user_session.get("message_history", [])
+    pinned_docs = cl.user_session.get("attached_document_text", "")
     
+    start_time = time()
+
+    # -------------------------------------------------------------------------
+    # 0) Procesar Contexto Dinámico (Archivos Adjuntos por el Usuario)
+    # -------------------------------------------------------------------------
+    if message.elements:
+        for element in message.elements:
+            if element.mime == "text/plain":
+                with open(element.path, "r", encoding="utf-8") as f:
+                    pinned_docs += f"\n--- INICIO DOCUMENTO ADJUNTO: {element.name} ---\n{f.read()}\n--- FIN DOCUMENTO ADJUNTO ---\n"
+            elif element.mime == "application/pdf":
+                try:
+                    import PyPDF2
+                    with open(element.path, "rb") as f:
+                        reader = PyPDF2.PdfReader(f)
+                        pdf_text = "\n".join([page.extract_text() or "" for page in reader.pages])
+                        pinned_docs += f"\n--- INICIO PDF ADJUNTO: {element.name} ---\n{pdf_text}\n--- FIN PDF ADJUNTO ---\n"
+                except Exception as e:
+                    await cl.Message(content=f"⚠️ No se pudo extraer el texto del PDF {element.name}: {e}").send()
+        
+        # Guardar en la sesión para recordarlo todo el chat
+        cl.user_session.set("attached_document_text", pinned_docs)
+
     # -------------------------------------------------------------------------
     # 1) Azure AI Search (si está configurado vía variables de entorno)
     # -------------------------------------------------------------------------
@@ -58,8 +90,16 @@ async def on_message(message: cl.Message):
     search_top_k = int(os.getenv("SEARCH_TOP_K", "3"))
     openai_temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.2"))
     openai_top_p = float(os.getenv("OPENAI_TOP_P", "0.95"))
-    openai_max_tokens = int(os.getenv("OPENAI_MAX_TOKENS", "500"))
+    openai_max_tokens = int(os.getenv("OPENAI_MAX_TOKENS", "2000"))
 
+    safety_result = check_text(message.content)
+    if not safety_result["is_safe"]:
+        blocked = ", ".join(safety_result["blocked_categories"])
+        await cl.Message(
+            content=f"⚠️ Tu mensaje no pudo ser procesado por contener contenido inapropiado ({blocked}). Por favor reformula tu pregunta."
+        ).send()
+        return
+    
     docs_for_rag = []
     if endpoint and api_key and index_name:
         try:
@@ -81,54 +121,77 @@ async def on_message(message: cl.Message):
             results = client.search(search_text=message.content, vector_queries=vector_queries, top=search_top_k)
 
             lines = [f"Top results from Azure AI Search (top {search_top_k}):\n"]
+            import re
             for i, doc in enumerate(results):
                 # Campos típicos: title, url/source, content/text
-                title = doc.get("title") or doc.get("metadata_storage_name") or doc.get("id") or f"doc-{i+1}"
+                title = doc.get("title") or doc.get("metadata_storage_name") or f"Documento_Legal_{i+1}"
+                # Limpiar el título para usarlo como 'Keyword' (quitar .pdf, .docx)
+                clean_title = re.sub(r'\.[a-zA-Z0-9]+$', '', title)
+                
                 url = doc.get("url") or doc.get("source") or doc.get("filepath")
-                snippet = doc.get("content") or doc.get("chunk") or doc.get("chunk_text") or doc.get("text")
-                if snippet:
-                    s = str(snippet)
-                    snippet = (s[:240] + "…") if len(s) > 240 else s
-                part = f"{i+1}. {title}"
+                raw_snippet = doc.get("content") or doc.get("chunk") or doc.get("chunk_text") or doc.get("text")
+                full_snippet = str(raw_snippet) if raw_snippet else ""
+                short_snippet = (full_snippet[:500] + "…") if len(full_snippet) > 500 else full_snippet
+
+                part = f"- {clean_title}"
                 if url:
                     part += f" — {url}"
-                if snippet:
-                    part += f"\n   {snippet}"
+                if short_snippet:
+                    part += f"\n   {short_snippet}"
                 lines.append(part)
                 docs_for_rag.append({
-                    "id": i + 1,
+                    "id": clean_title,  # Usamos el título limpio como identificador/palabra clave
                     "title": title,
                     "url": url,
-                    "snippet": snippet or ""
+                    "snippet": short_snippet,
+                    "full_snippet": full_snippet
                 })
 
             # If Azure OpenAI is configured, generate an answer grounded on these docs
             if aoai_endpoint and aoai_key and aoai_deployment:
-                # Build a compact context with citations like [1], [2] …
+                # Build a compact context with keyword citations instead of numbers
                 context_lines = []
                 for d in docs_for_rag:
-                    cite = f"[{d['id']}] {d['title']}" + (f" — {d['url']}" if d['url'] else "")
+                    cite = f"FUENTE DOCUMENTAL: [{d['id']}]" + (f" — Ubicación: {d['url']}" if d['url'] else "")
                     if d['snippet']:
-                        cite += f"\n{d['snippet']}"
+                        cite += f"\nExtracto Legal:\n{d['snippet']}"
                     context_lines.append(cite)
                 context = "\n\n".join(context_lines)
 
                 system_prompt = (
-                    "You are a helpful assistant. Answer the user using only the provided context. "
-                    "Cite sources using square brackets like [1], [2]. If unsure, say you don't know."
+                    "Eres un asistente experto legal y técnico. Tu objetivo es cruzar y evaluar documentos.\n"
+                    "El usuario puede proveerte su propio 'Documento Adjunto' y hacerte una pregunta.\n"
+                    "Utiliza PRINCIPALMENTE el contexto recuperado de la Base de Conocimiento (Azure AI Search) para conocer las reglas o leyes.\n"
+                    "Si la información está disponible, responde detalladamente justificando tu análisis.\n"
+                    "REGLA ESTRICTA DE CITACIÓN: Siempre que uses información del contexto legal, DEBES citar la fuente usando corchetes con el NOMBRE EXACTO de la FUENTE DOCUMENTAL provista, por ejemplo: [NRP-23_Normas] o [Ley_de_Bancos]. NUNCA uses números como [1]."
                 )
-                user_prompt = (
-                    f"User question: {message.content}\n\nContext:\n{context}"
-                )
+                
+                # Para evitar desbordar el contexto con historial repetido, inyectamos el RAG y los PDFs 
+                # ÚNICAMENTE en el último mensaje actual del usuario.
+                current_context = f"=== CONTEXTO LEGAL / REGLAS (Azure AI Search) ===\n{context}\n"
+                if pinned_docs:
+                    current_context += f"\n=== DOCUMENTOS DEL USUARIO A EVALUAR (Archivos Adjuntos) ===\n{pinned_docs}\n"
+
+                current_msg = f"Pregunta o Instrucción del Usuario: {message.content}\n\n{current_context}"
+
+                llm_messages = [{"role": "system", "content": system_prompt}]
+                # Agregar el historial de la conversación (memoria limpia)
+                llm_messages.extend(msg_history)
+                # Agregar el mensaje actual con el contexto inyectado
+                llm_messages.append({"role": "user", "content": current_msg})
+
+                # --- INDICADOR DE CARGANDO / PENSANDO ---
+                msg = cl.Message(content="Pensando ⏳")
+                await msg.send()
 
                 # Guard against common misconfig: deployment accidentally set to API version
                 if aoai_deployment and aoai_deployment[:4].isdigit() and aoai_deployment.count('-') >= 2:
-                    await cl.Message(content=(
+                    msg.content = (
                         "Configuración inválida: `AZURE_OPENAI_DEPLOYMENT` parece ser una versión ("
                         f"{aoai_deployment}). Debe ser el NOMBRE EXACTO del deployment en AI Foundry,"
                         " por ejemplo `gpt-4o-mini` o el nombre que le diste."
-                    )).send()
-                    # Show search-only as fallback
+                    )
+                    await msg.update()
                     await cl.Message(content="\n".join(lines)).send()
                     return
 
@@ -139,10 +202,7 @@ async def on_message(message: cl.Message):
                         
                     resp = llm.chat.completions.create(
                         model=aoai_deployment,
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
+                        messages=llm_messages,
                         temperature=openai_temperature,
                         top_p=openai_top_p,
                         max_tokens=openai_max_tokens,
@@ -151,28 +211,56 @@ async def on_message(message: cl.Message):
                     if not answer:
                         answer = "No pude generar respuesta con el contexto disponible."
 
+                    user = cl.user_session.get("user")
+                    user_id = user.identifier if user else "anonymous"
+                    elapsed_ms = int((time() - start_time) * 1000)
+                    log_interaction(
+                        user=user_id,
+                        question=message.content,
+                        answer=answer,
+                        docs_used=docs_for_rag,
+                        response_time_ms=elapsed_ms,
+                        grounded=True,
+                    )
+                    
                     # Crear elementos de citación elegantes en Chainlit
-                    import re
                     text_elements = []
-                    if re.search(r'\[\d+\]', answer):
-                        for d in docs_for_rag:
-                            source_name = str(d['id'])
-                            elem_content = f"**Documento:** {d['title']}\n"
-                            if d['url']:
-                                elem_content += f"**Ruta:** {d['url']}\n"
-                            elem_content += f"\n---\n**Extracto Recuperado:**\n{d['snippet']}"
-                            
-                            text_elements.append(
-                                cl.Text(name=source_name, content=elem_content, display="side")
-                            )
+                    for d in docs_for_rag:
+                        source_name = str(d['id'])
+                        elem_content = f"**Documento:** {d['title']}\n"
+                        if d['url']:
+                            elem_content += f"**Ruta:** {d['url']}\n"
+                        elem_content += f"\n---\n**Extracto Completo Recuperado:**\n{d['full_snippet']}"
+                        
+                        text_elements.append(
+                            cl.Text(name=source_name, content=elem_content, display="side")
+                        )
 
-                    await cl.Message(content=answer, elements=text_elements).send()
+                    # Guardar en memoria la pregunta limpia de este turno y la respuesta para el futuro
+                    msg_history.append({"role": "user", "content": message.content})
+                    msg_history.append({"role": "assistant", "content": answer})
+                    # Guardar solo los últimos 10 mensajes (5 turnos de ida y vuelta) para no saturar tokens
+                    if len(msg_history) > 10:
+                        msg_history = msg_history[-10:]
+                    cl.user_session.set("message_history", msg_history)
+
+                    # Si la respuesta no incluyó citas por formato, Chainlit al menos forzará botones al pie.
+                    if pinned_docs and not docs_for_rag:
+                        # Si el usuario solo subió un PDF y no obtuvo resultados de Azure
+                        text_elements.append(
+                            cl.Text(name="Documento Adjunto", content="Se evaluó el documento que subiste previamente.", display="side")
+                        )
+
+                    msg.content = answer
+                    msg.elements = text_elements
+                    await msg.update()
                     return
                 except Exception as e:
-                    await cl.Message(content=(
+                    msg.content = (
                         "❌ Azure OpenAI error. Posibles causas: nombre de deployment incorrecto, endpoint del proyecto/servicio mal configurado, "
                         f"o permisos. Detalle: {e}"
-                    )).send()
+                    )
+                    await msg.update()
                     # Fall back to showing search results only
                     await cl.Message(content="\n".join(lines)).send()
                     return
