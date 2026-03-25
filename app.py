@@ -14,13 +14,18 @@ def oauth_callback(
     raw_user_data: dict,
     default_user: cl.User,
 ) -> cl.User | None:
-    email = raw_user_data.get("email", "")
+    # Construir nombre desde claims de Azure AD
+    given_name = raw_user_data.get("given_name", "")
+    family_name = raw_user_data.get("family_name", "")
     
-    # Opcional: restringir solo a tu dominio
-    # if not email.endswith("@tuempresa.com"):
-    #     return None
+    if given_name:
+        display_name = f"{given_name} {family_name}".strip()
+    else:
+        display_name = raw_user_data.get("name", default_user.identifier.split("@")[0])
 
-    return default_user  # acepta a todos los del tenant
+    # Guardar el nombre en metadata para usarlo después
+    default_user.metadata["display_name"] = display_name
+    return default_user
 
 
 # ✅ NUEVO: Mensaje de bienvenida personalizado al iniciar sesión
@@ -28,9 +33,10 @@ def oauth_callback(
 async def on_chat_start():
     user = cl.user_session.get("user")
     if user:
-        name = user.metadata.get("name", user.identifier)
+        name = user.metadata.get("display_name") or user.identifier.split("@")[0]
+        first_name = name.split()[0].capitalize()
         await cl.Message(
-            content=f"Bienvenido, **{name}** 👋\n¿En qué puedo ayudarte hoy?"
+            content=f"Bienvenido, **{first_name}** 👋\n¿En qué puedo ayudarte hoy?"
         ).send()
         
 # Esta función se ejecuta cada vez que el usuario envía un mensaje
