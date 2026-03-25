@@ -7,6 +7,7 @@ from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
 from openai import AzureOpenAI, OpenAI
 from audit import log_interaction
+from safety import check_text
 load_dotenv(override=True)  # loads variables from .env into the environment, override defaults
 
 @cl.oauth_callback
@@ -45,6 +46,7 @@ async def on_chat_start():
 async def on_message(message: cl.Message):
     
     start_time = time()
+
     # -------------------------------------------------------------------------
     # 1) Azure AI Search (si está configurado vía variables de entorno)
     # -------------------------------------------------------------------------
@@ -64,6 +66,14 @@ async def on_message(message: cl.Message):
     openai_top_p = float(os.getenv("OPENAI_TOP_P", "0.95"))
     openai_max_tokens = int(os.getenv("OPENAI_MAX_TOKENS", "500"))
 
+    safety_result = check_text(message.content)
+    if not safety_result["is_safe"]:
+        blocked = ", ".join(safety_result["blocked_categories"])
+        await cl.Message(
+            content=f"⚠️ Tu mensaje no pudo ser procesado por contener contenido inapropiado ({blocked}). Por favor reformula tu pregunta."
+        ).send()
+        return
+    
     docs_for_rag = []
     if endpoint and api_key and index_name:
         try:
