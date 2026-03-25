@@ -1,9 +1,12 @@
+from time import time
+
 import chainlit as cl
 import os
 from dotenv import load_dotenv
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
 from openai import AzureOpenAI, OpenAI
+from audit import log_interaction
 load_dotenv(override=True)  # loads variables from .env into the environment, override defaults
 
 @cl.oauth_callback
@@ -46,6 +49,7 @@ async def on_message(message: cl.Message):
     msg_history = cl.user_session.get("message_history", [])
     pinned_docs = cl.user_session.get("attached_document_text", "")
     
+    start_time = time()
     # -------------------------------------------------------------------------
     # 0) Procesar Contexto Dinámico (Archivos Adjuntos por el Usuario)
     # -------------------------------------------------------------------------
@@ -197,6 +201,18 @@ async def on_message(message: cl.Message):
                     if not answer:
                         answer = "No pude generar respuesta con el contexto disponible."
 
+                    user = cl.user_session.get("user")
+                    user_id = user.identifier if user else "anonymous"
+                    elapsed_ms = int((time() - start_time) * 1000)
+                    log_interaction(
+                        user=user_id,
+                        question=message.content,
+                        answer=answer,
+                        docs_used=docs_for_rag,
+                        response_time_ms=elapsed_ms,
+                        grounded=True,
+                    )
+                    
                     # Crear elementos de citación elegantes en Chainlit
                     text_elements = []
                     for d in docs_for_rag:
