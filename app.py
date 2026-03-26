@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
 from openai import AzureOpenAI, OpenAI
-from audit import log_interaction
+from audit import log_interaction, compute_grounding_score 
 from safety import check_text
 load_dotenv(override=True)  # loads variables from .env into the environment, override defaults
 
@@ -211,19 +211,21 @@ async def on_message(message: cl.Message):
                     if not answer:
                         answer = "No pude generar respuesta con el contexto disponible."
 
-                    user = cl.user_session.get("user")
-                    user_id = user.identifier if user else "anonymous"
-                    elapsed_ms = int((time() - start_time) * 1000)
-                    log_interaction(
-                        user=user_id,
-                        question=message.content,
-                        answer=answer,
-                        docs_used=docs_for_rag,
-                        response_time_ms=elapsed_ms,
-                        grounded=True,
+                    # Grounding score
+                    grounding_score = compute_grounding_score(answer, docs_for_rag)
+                    if grounding_score >= 0.7:
+                        score_label = "🟢 Alta"
+                    elif grounding_score >= 0.4:
+                        score_label = "🟡 Media"
+                    else:
+                        score_label = "🔴 Baja"
+
+                    answer_with_score = (
+                        f"{answer}\n\n---\n"
+                        f"📊 **Confiabilidad:** {score_label} ({grounding_score:.0%})"
                     )
-                    
-                    # Crear elementos de citación elegantes en Chainlit
+
+                    # Crear elementos de citación elegantes en Chainlit (NUEVO METODO)
                     text_elements = []
                     for d in docs_for_rag:
                         source_name = str(d['id'])
@@ -239,21 +241,34 @@ async def on_message(message: cl.Message):
                     # Guardar en memoria la pregunta limpia de este turno y la respuesta para el futuro
                     msg_history.append({"role": "user", "content": message.content})
                     msg_history.append({"role": "assistant", "content": answer})
-                    # Guardar solo los últimos 10 mensajes (5 turnos de ida y vuelta) para no saturar tokens
+                    # Guardar solo los últimos 10 mensajes para no saturar tokens
                     if len(msg_history) > 10:
                         msg_history = msg_history[-10:]
                     cl.user_session.set("message_history", msg_history)
 
-                    # Si la respuesta no incluyó citas por formato, Chainlit al menos forzará botones al pie.
+                    # Si la respuesta no incluyó citas, y hay doc adjunto, forzamos botones al pie.
                     if pinned_docs and not docs_for_rag:
-                        # Si el usuario solo subió un PDF y no obtuvo resultados de Azure
                         text_elements.append(
                             cl.Text(name="Documento Adjunto", content="Se evaluó el documento que subiste previamente.", display="side")
                         )
 
-                    msg.content = answer
+                    # Actualizar UI con la respuesta, puntaje de evaluación y citaciones
+                    msg.content = answer_with_score
                     msg.elements = text_elements
                     await msg.update()
+
+                    # Audit log
+                    user = cl.user_session.get("user")
+                    user_id = user.identifier if user else "anonymous"
+                    elapsed_ms = int((time() - start_time) * 1000)
+                    log_interaction(
+                        user=user_id,
+                        question=message.content,
+                        answer=answer,
+                        docs_used=docs_for_rag,
+                        response_time_ms=elapsed_ms,
+                        grounded=True,
+                    )
                     return
                 except Exception as e:
                     msg.content = (
