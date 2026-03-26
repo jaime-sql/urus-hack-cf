@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime, timezone
 from azure.storage.blob import BlobServiceClient
 
@@ -14,8 +15,34 @@ def _get_blob_client(blob_name: str):
     try:
         container.create_container()
     except Exception:
-        pass  # ya existe
+        pass
     return container.get_blob_client(blob_name)
+
+
+def compute_grounding_score(answer: str, docs_used: list) -> float:
+    """
+    Score 0.0-1.0 que mide qué tan anclada está
+    la respuesta en los documentos recuperados.
+    """
+    if not docs_used or not answer:
+        return 0.0
+
+    # Score 1: cuántos docs fueron citados con [1], [2]...
+    cited_ids = set(re.findall(r'\[(\d+)\]', answer))
+    total_docs = len(docs_used)
+    citation_score = len(cited_ids) / total_docs if total_docs > 0 else 0
+
+    # Score 2: overlap de palabras entre respuesta y contexto recuperado
+    answer_words = set(answer.lower().split())
+    context_words = set()
+    for d in docs_used:
+        context_words.update(d.get("snippet", "").lower().split())
+
+    overlap = len(answer_words & context_words)
+    overlap_score = min(overlap / 20, 1.0)
+
+    # Promedio ponderado: citas pesan más que overlap
+    return round((citation_score * 0.6) + (overlap_score * 0.4), 2)
 
 
 def log_interaction(
@@ -26,16 +53,15 @@ def log_interaction(
     response_time_ms: int,
     grounded: bool = True,
 ):
-    """
-    Guarda una entrada de auditoría en Azure Blob Storage.
-    Cada día tiene su propio archivo .jsonl para facilitar consultas.
-    """
+    grounding_score = compute_grounding_score(answer, docs_used)
+
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "user": user,
         "question": question,
         "answer_length": len(answer),
         "grounded": grounded,
+        "grounding_score": grounding_score,
         "sources_used": [
             {"id": d["id"], "title": d["title"], "url": d.get("url", "")}
             for d in docs_used
@@ -45,12 +71,10 @@ def log_interaction(
 
     line = json.dumps(entry, ensure_ascii=False) + "\n"
 
-    # Un archivo por día: audit_2026-03-25.jsonl
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     blob_name = f"audit_{today}.jsonl"
 
     if not CONNECTION_STRING:
-        # Fallback local si no hay Blob Storage configurado
         with open(blob_name, "a", encoding="utf-8") as f:
             f.write(line)
         print(f"[audit] Guardado localmente en {blob_name}")
@@ -58,18 +82,13 @@ def log_interaction(
 
     try:
         blob = _get_blob_client(blob_name)
-
-        # Si el blob ya existe, descarga el contenido y agrega la nueva línea
         try:
             existing = blob.download_blob().readall().decode("utf-8")
         except Exception:
             existing = ""
-
         blob.upload_blob(existing + line, overwrite=True)
-        print(f"[audit] Entrada guardada en Blob Storage: {blob_name}")
-
+        print(f"[audit] Guardado en Blob Storage: {blob_name} | score: {grounding_score}")
     except Exception as e:
         print(f"[audit] Error guardando en Blob Storage: {e}")
-        # Fallback local
         with open(blob_name, "a", encoding="utf-8") as f:
             f.write(line)
