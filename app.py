@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
 from openai import AzureOpenAI, OpenAI
+from fastapi.responses import RedirectResponse
 from audit import log_interaction, compute_grounding_score 
 from safety import check_text
 load_dotenv(override=True)  # loads variables from .env into the environment, override defaults
@@ -31,6 +32,18 @@ def oauth_callback(
         }
     )
     return custom_user
+
+@cl.on_logout
+def on_logout(request, response):
+    """Al cerrar sesión, redirigimos al endpoint de logout de Microsoft
+    para limpiar también la sesión SSO del navegador."""
+    tenant_id = os.getenv("OAUTH_AZURE_AD_TENANT_ID", "common")
+    redirect_uri = os.getenv("CHAINLIT_URL", "http://localhost:8000")
+    ms_logout_url = (
+        f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/logout"
+        f"?post_logout_redirect_uri={redirect_uri}"
+    )
+    return RedirectResponse(url=ms_logout_url)
 
 @cl.on_chat_start
 async def on_chat_start():
@@ -87,7 +100,7 @@ async def on_message(message: cl.Message):
     aoai_embedding_deployment = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-small")
     
     # Parámetros para optimizar respuestas y tokens
-    search_top_k = int(os.getenv("SEARCH_TOP_K", "3"))
+    search_top_k = int(os.getenv("SEARCH_TOP_K", "3"))  # Keep at 3: more docs dilute citation score
     openai_temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.2"))
     openai_top_p = float(os.getenv("OPENAI_TOP_P", "0.95"))
     openai_max_tokens = int(os.getenv("OPENAI_MAX_TOKENS", "2000"))
@@ -160,6 +173,49 @@ async def on_message(message: cl.Message):
 
                 # === AUTO-DETECCIÓN DE TRACK ===
                 q = message.content.lower()
+
+                # === DETECCIÓN DE IDIOMA (debe ir ANTES del citation_mandate) ===
+                english_indicators = ["what", "how", "why", "when", "where", "which", "who",
+                                      "is", "are", "can", "does", "do", "the", "based", "steps",
+                                      "should", "would", "could", "explain", "describe", "list",
+                                      "according", "define", "definition", "nature", "perform",
+                                      "legal", "law", "regulation", "compliance", "risk", "bank"]
+                english_word_count = sum(1 for w in english_indicators if w in q.split())
+                is_english = english_word_count >= 2
+
+                # Regla de citación obligatoria — etiquetas en el idioma del usuario
+                # citation_score = cited_docs / total_docs (peso 60%)
+                # overlap_score  = palabras compartidas / 15  (peso 40%)
+                unique_doc_ids = list(dict.fromkeys(d['id'] for d in docs_for_rag))
+                all_doc_ids = ", ".join(f"[{did}]" for did in unique_doc_ids)
+                if is_english:
+                    citation_mandate = (
+                        f"\n\n=== MANDATORY CITATION RULE ===\n"
+                        f"Available documents: {all_doc_ids}\n"
+                        f"You MUST cite EVERY document using its exact name in brackets.\n"
+                        f"Use key phrases and terminology taken verbatim from the document extracts.\n"
+                        f"Required structure:\n"
+                        f"  1. Normative Framework: {all_doc_ids}\n"
+                        f"  2. Analysis: one paragraph per document with a direct quote or reference.\n"
+                        f"  3. Recommendation: grounded in the cited documents.\n"
+                        f"NEVER skip a document. NEVER use [1], [2] as citations.\n"
+                        f"IMPORTANT: Respond ENTIRELY in English."
+                    )
+                else:
+                    citation_mandate = (
+                        f"\n\n=== REGLA OBLIGATORIA DE CITACIÓN ===\n"
+                        f"Documentos disponibles: {all_doc_ids}\n"
+                        f"DEBES citar CADA documento usando exactamente su nombre entre corchetes.\n"
+                        f"Usa frases clave y terminología tomada textualmente de sus extractos.\n"
+                        f"Estructura:\n"
+                        f"  1. Marco normativo: {all_doc_ids}\n"
+                        f"  2. Análisis: un párrafo por documento con cita directa de su contenido.\n"
+                        f"  3. Recomendación: fundamentada en los documentos citados.\n"
+                        f"NUNCA omitas un documento. NUNCA uses [1], [2] como citas.\n"
+                        f"IMPORTANTE: Responde SIEMPRE en español."
+                    )
+
+                # === TRACK DETECTION → system_prompt ===
                 if any(w in q for w in ["ley", "artículo", "código", "regulación", "normativa", "legal",
                                          "jurídico", "contrato", "demanda", "litigio", "tribunal",
                                          "sentencia", "derecho", "statute", "clause", "court", "rights"]):
@@ -170,7 +226,7 @@ async def on_message(message: cl.Message):
                         "2) explicación del alcance legal, 3) recomendación práctica de acción.\n"
                         "CITACIÓN: Cita el documento entre corchetes con su nombre, "
                         "ejemplo: [NRP-23] o [Ley_de_Bancos]. NUNCA uses números como [1]."
-                    )
+                    ) + citation_mandate
                 elif any(w in q for w in ["compliance", "cumplimiento", "auditoría", "riesgo", "control",
                                            "due diligence", "kyc", "aml", "lavado", "pep",
                                            "política interna", "policy", "audit", "risk", "reporting"]):
@@ -180,7 +236,7 @@ async def on_message(message: cl.Message):
                         "Responde SIEMPRE con: 1) ✅ CUMPLE / ⚠️ PARCIAL / ❌ NO CUMPLE por punto, "
                         "2) la norma específica aplicable, 3) brechas y pasos correctivos.\n"
                         "CITACIÓN: Cita el documento entre corchetes con su nombre. NUNCA uses números."
-                    )
+                    ) + citation_mandate
                 elif any(w in q for w in ["salud", "paciente", "médico", "clínico", "diagnóstico",
                                            "tratamiento", "hipaa", "datos médicos", "expediente",
                                            "health", "patient", "medical", "clinical", "healthcare", "ehr"]):
@@ -190,7 +246,7 @@ async def on_message(message: cl.Message):
                         "Responde SIEMPRE con: 1) la regulación aplicable (HIPAA, ley local), "
                         "2) implicaciones de privacidad del paciente, 3) recomendaciones de cumplimiento.\n"
                         "CITACIÓN: Cita el documento entre corchetes con su nombre. NUNCA uses números."
-                    )
+                    ) + citation_mandate
                 else:
                     track = "Finance"
                     system_prompt = (
@@ -198,18 +254,7 @@ async def on_message(message: cl.Message):
                         "Responde SIEMPRE con: 1) la ley financiera aplicable (NRP-23, Basel III, etc.), "
                         "2) el impacto financiero y nivel de riesgo, 3) recomendaciones concretas.\n"
                         "CITACIÓN: Cita el documento entre corchetes con su nombre. NUNCA uses números."
-                    )
-
-                # === DETECCIÓN DE IDIOMA ===
-                # Si la pregunta tiene mayoría de palabras en inglés, respondemos en inglés.
-                english_indicators = ["what", "how", "why", "when", "where", "which", "who",
-                                      "is", "are", "can", "does", "do", "the", "based", "steps",
-                                      "should", "would", "could", "explain", "describe", "list"]
-                english_word_count = sum(1 for w in english_indicators if w in q.split())
-                if english_word_count >= 2:
-                    system_prompt += "\nIMPORTANT: The user wrote in English. You MUST respond entirely in English."
-                else:
-                    system_prompt += "\nIMPORTANTE: El usuario escribió en español. Responde SIEMPRE en español."
+                    ) + citation_mandate
 
                 # Para evitar desbordar el contexto con historial repetido, inyectamos el RAG y los PDFs 
                 # ÚNICAMENTE en el último mensaje actual del usuario.
