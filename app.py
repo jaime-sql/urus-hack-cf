@@ -225,14 +225,27 @@ async def on_message(message: cl.Message):
                         f"📊 **Confiabilidad:** {score_label} ({grounding_score:.0%})"
                     )
 
-                    # Crear elementos de citación elegantes en Chainlit (NUEVO METODO)
-                    text_elements = []
+                    # Agrupar fragmentos por documento para evitar botones y nombres duplicados
+                    grouped_docs = {}
                     for d in docs_for_rag:
                         source_name = str(d['id'])
-                        elem_content = f"**Documento:** {d['title']}\n"
-                        if d['url']:
-                            elem_content += f"**Ruta:** {d['url']}\n"
-                        elem_content += f"\n---\n**Extracto Completo Recuperado:**\n{d['full_snippet']}"
+                        if source_name not in grouped_docs:
+                            grouped_docs[source_name] = {
+                                "title": d['title'],
+                                "url": d['url'],
+                                "snippets": [d['full_snippet']]
+                            }
+                        else:
+                            grouped_docs[source_name]["snippets"].append(d['full_snippet'])
+
+                    # Crear elementos de citación elegantes en Chainlit (NUEVO METODO)
+                    text_elements = []
+                    for source_name, data in grouped_docs.items():
+                        elem_content = f"**Documento:** {data['title']}\n"
+                        if data['url']:
+                            elem_content += f"**Ruta:** {data['url']}\n"
+                        for idx, snippet in enumerate(data['snippets']):
+                            elem_content += f"\n---\n**Extracto {idx+1}:**\n{snippet}"
                         
                         text_elements.append(
                             cl.Text(name=source_name, content=elem_content, display="side")
@@ -246,14 +259,24 @@ async def on_message(message: cl.Message):
                         msg_history = msg_history[-10:]
                     cl.user_session.set("message_history", msg_history)
 
-                    # Si la respuesta no incluyó citas, y hay doc adjunto, forzamos botones al pie.
-                    if pinned_docs and not docs_for_rag:
+                    # Siempre agregar el Documento Adjunto a los elementos interactivos si existe
+                    if pinned_docs:
                         text_elements.append(
-                            cl.Text(name="Documento Adjunto", content="Se evaluó el documento que subiste previamente.", display="side")
+                            cl.Text(name="Documento Adjunto", content="Extracto del Documento Adjunto:\n\n" + pinned_docs[:2500] + "\n[...CONTINÚA]", display="side")
                         )
 
-                    # Actualizar UI con la respuesta, puntaje de evaluación y citaciones
-                    msg.content = answer_with_score
+                    # Forzar a Chainlit a mostrar los botones siempre sin duplicar
+                    footer = "\n\n**📚 Fuentes analizadas:**\n"
+                    for source_name in grouped_docs.keys():
+                        footer += f"- {source_name}\n"
+                    if pinned_docs:
+                        footer += f"- Documento Adjunto\n"
+
+                    # Construimos el mensaje final
+                    final_content = answer_with_score + footer
+
+                    # Actualizar UI con la respuesta, puntaje de evaluación y citaciones garantizadas
+                    msg.content = final_content
                     msg.elements = text_elements
                     await msg.update()
 
