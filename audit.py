@@ -27,19 +27,27 @@ def compute_grounding_score(answer: str, docs_used: list) -> float:
     if not docs_used or not answer:
         return 0.0
 
-    # Score 1: cuántos docs fueron citados con [1], [2]...
-    cited_ids = set(re.findall(r'\[(\d+)\]', answer))
+    # Score 1: cuántos docs fueron citados por su nombre clave, ej: [NRP-23] o [LINEAMIENTOS_TECNICOS]
     total_docs = len(docs_used)
-    citation_score = len(cited_ids) / total_docs if total_docs > 0 else 0
+    cited_count = 0
+    for d in docs_used:
+        doc_id = str(d.get("id", ""))
+        if doc_id and doc_id.lower() in answer.lower():
+            cited_count += 1
+    citation_score = cited_count / total_docs if total_docs > 0 else 0
 
     # Score 2: overlap de palabras entre respuesta y contexto recuperado
-    answer_words = set(answer.lower().split())
+    # Filtramos stopwords comunes para no inflar el score con artículos/preposiciones
+    stopwords = {"de", "la", "el", "en", "y", "a", "que", "los", "las", "un", "una",
+                 "the", "of", "and", "to", "is", "in", "for", "that", "this", "with"}
+    answer_words = set(answer.lower().split()) - stopwords
     context_words = set()
     for d in docs_used:
         context_words.update(d.get("snippet", "").lower().split())
+    context_words -= stopwords
 
     overlap = len(answer_words & context_words)
-    overlap_score = min(overlap / 20, 1.0)
+    overlap_score = min(overlap / 15, 1.0)  # 15 palabras en común = score perfecto
 
     # Promedio ponderado: citas pesan más que overlap
     return round((citation_score * 0.6) + (overlap_score * 0.4), 2)

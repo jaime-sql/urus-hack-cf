@@ -158,14 +158,59 @@ async def on_message(message: cl.Message):
                     context_lines.append(cite)
                 context = "\n\n".join(context_lines)
 
-                system_prompt = (
-                    "Eres un asistente experto legal y técnico. Tu objetivo es cruzar y evaluar documentos.\n"
-                    "El usuario puede proveerte su propio 'Documento Adjunto' y hacerte una pregunta.\n"
-                    "Utiliza PRINCIPALMENTE el contexto recuperado de la Base de Conocimiento (Azure AI Search) para conocer las reglas o leyes.\n"
-                    "Si la información está disponible, responde detalladamente justificando tu análisis.\n"
-                    "REGLA ESTRICTA DE CITACIÓN: Siempre que uses información del contexto legal, DEBES citar la fuente usando corchetes con el NOMBRE EXACTO de la FUENTE DOCUMENTAL provista, por ejemplo: [NRP-23_Normas] o [Ley_de_Bancos]. NUNCA uses números como [1]."
-                )
-                
+                # === AUTO-DETECCIÓN DE TRACK ===
+                q = message.content.lower()
+                if any(w in q for w in ["ley", "artículo", "código", "regulación", "normativa", "legal",
+                                         "jurídico", "contrato", "demanda", "litigio", "tribunal",
+                                         "sentencia", "derecho", "statute", "clause", "court", "rights"]):
+                    track = "Legal"
+                    system_prompt = (
+                        "Eres URUS Legal Advisor, experto en Derecho y análisis jurídico.\n"
+                        "Responde SIEMPRE con: 1) el artículo o norma exacta aplicable, "
+                        "2) explicación del alcance legal, 3) recomendación práctica de acción.\n"
+                        "CITACIÓN: Cita el documento entre corchetes con su nombre, "
+                        "ejemplo: [NRP-23] o [Ley_de_Bancos]. NUNCA uses números como [1]."
+                    )
+                elif any(w in q for w in ["compliance", "cumplimiento", "auditoría", "riesgo", "control",
+                                           "due diligence", "kyc", "aml", "lavado", "pep",
+                                           "política interna", "policy", "audit", "risk", "reporting"]):
+                    track = "Compliance"
+                    system_prompt = (
+                        "Eres URUS Compliance Expert, especialista en cumplimiento normativo.\n"
+                        "Responde SIEMPRE con: 1) ✅ CUMPLE / ⚠️ PARCIAL / ❌ NO CUMPLE por punto, "
+                        "2) la norma específica aplicable, 3) brechas y pasos correctivos.\n"
+                        "CITACIÓN: Cita el documento entre corchetes con su nombre. NUNCA uses números."
+                    )
+                elif any(w in q for w in ["salud", "paciente", "médico", "clínico", "diagnóstico",
+                                           "tratamiento", "hipaa", "datos médicos", "expediente",
+                                           "health", "patient", "medical", "clinical", "healthcare", "ehr"]):
+                    track = "Healthcare"
+                    system_prompt = (
+                        "Eres URUS Healthcare Advisor, experto en regulaciones de salud y privacidad médica.\n"
+                        "Responde SIEMPRE con: 1) la regulación aplicable (HIPAA, ley local), "
+                        "2) implicaciones de privacidad del paciente, 3) recomendaciones de cumplimiento.\n"
+                        "CITACIÓN: Cita el documento entre corchetes con su nombre. NUNCA uses números."
+                    )
+                else:
+                    track = "Finance"
+                    system_prompt = (
+                        "Eres URUS Finance Advisor, experto en regulaciones financieras y banca.\n"
+                        "Responde SIEMPRE con: 1) la ley financiera aplicable (NRP-23, Basel III, etc.), "
+                        "2) el impacto financiero y nivel de riesgo, 3) recomendaciones concretas.\n"
+                        "CITACIÓN: Cita el documento entre corchetes con su nombre. NUNCA uses números."
+                    )
+
+                # === DETECCIÓN DE IDIOMA ===
+                # Si la pregunta tiene mayoría de palabras en inglés, respondemos en inglés.
+                english_indicators = ["what", "how", "why", "when", "where", "which", "who",
+                                      "is", "are", "can", "does", "do", "the", "based", "steps",
+                                      "should", "would", "could", "explain", "describe", "list"]
+                english_word_count = sum(1 for w in english_indicators if w in q.split())
+                if english_word_count >= 2:
+                    system_prompt += "\nIMPORTANT: The user wrote in English. You MUST respond entirely in English."
+                else:
+                    system_prompt += "\nIMPORTANTE: El usuario escribió en español. Responde SIEMPRE en español."
+
                 # Para evitar desbordar el contexto con historial repetido, inyectamos el RAG y los PDFs 
                 # ÚNICAMENTE en el último mensaje actual del usuario.
                 current_context = f"=== CONTEXTO LEGAL / REGLAS (Azure AI Search) ===\n{context}\n"
@@ -181,7 +226,8 @@ async def on_message(message: cl.Message):
                 llm_messages.append({"role": "user", "content": current_msg})
 
                 # --- INDICADOR DE CARGANDO / PENSANDO ---
-                msg = cl.Message(content="Pensando ⏳")
+                track_emoji = {"Legal": "⚖️", "Compliance": "📋", "Healthcare": "🏥", "Finance": "💹"}
+                msg = cl.Message(content=f"{track_emoji.get(track, '🤖')} **Track detectado: {track}** — Analizando documentos... ⏳")
                 await msg.send()
 
                 # Guard against common misconfig: deployment accidentally set to API version
