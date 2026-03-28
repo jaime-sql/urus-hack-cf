@@ -26,6 +26,7 @@ URUS is an AI-powered document analysis and regulatory compliance assistant buil
 9. [Impact](#impact)
 10. [Future Enhancements](#future-enhancements)
 11. [Contributing](#contributing)
+12. [Screenshots](#screenshots)
 
 ---
 
@@ -233,3 +234,27 @@ The application will be available at `http://localhost:8000`.
 | `CHAINLIT_AUTH_SECRET` | Secret key for Chainlit session signing |
 | `CHAINLIT_URL` | Public URL of the deployed application |
 | `AZURE_STORAGE_CONNECTION_STRING` | Connection string for audit log Blob Storage |
+
+---
+
+## Screenshots
+
+### Login
+
+![Login Screen](public/screenshots/login.jpeg)
+
+![Login Step 1](public/screenshots/login%201.jpeg)
+
+![Login Step 3](public/screenshots/login%203.jpeg)
+
+![Login At A Glance](public/screenshots/login%20at%20a%20glance.jpeg)
+
+### Content Safety
+
+![Content Safety](public/screenshots/content%20safety.jpeg)
+
+### Audit Logs
+
+![Audit Logs](public/screenshots/audit%20logs.jpeg)
+
+![Audit Logs Detail](public/screenshots/auditslogs.jpeg)
