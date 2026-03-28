@@ -26,7 +26,8 @@ URUS is an AI-powered document analysis and regulatory compliance assistant buil
 9. [Impact](#impact)
 10. [Future Enhancements](#future-enhancements)
 11. [Contributing](#contributing)
-12. [Screenshots](#screenshots)
+12. [Demo](#demo)
+13. [Screenshots](#screenshots)
 
 ---
 
@@ -234,6 +235,22 @@ The application will be available at `http://localhost:8000`.
 | `CHAINLIT_AUTH_SECRET` | Secret key for Chainlit session signing |
 | `CHAINLIT_URL` | Public URL of the deployed application |
 | `AZURE_STORAGE_CONNECTION_STRING` | Connection string for audit log Blob Storage |
+
+---
+
+## Demo
+
+### Video Walkthrough
+
+Click the thumbnail below to watch the full demo on Google Drive:
+
+[![URUS Demo Video](https://drive.google.com/thumbnail?id=1QAP_AquJhzn8hrGSPfw93armoU_E0zaU)](https://drive.google.com/file/d/1QAP_AquJhzn8hrGSPfw93armoU_E0zaU/view?usp=sharing)
+
+### Presentation Slides
+
+View the full project presentation (PowerPoint):
+
+[📊 URUS — Project Presentation (OneDrive)](https://1drv.ms/p/c/a5083bdf893052fd/IQBuCd5W1cdcTZe0O5ojbBAQAbDhh2taAVeoE29bcwxocDA?e=DlnjHo)
 
 ---
 
